@@ -4,6 +4,8 @@ module Revise
 
 VERSION >= v"0.7.0-DEV.2359" && using FileWatching
 VERSION >= v"0.7.0-DEV.2575" && using Dates
+using REPL
+using Distributed
 
 using DataStructures: OrderedSet
 
@@ -25,8 +27,8 @@ const watched_files = Dict{String,WatchList}()
 # source code defined in the file. The expressions in the source code are organized by the
 # module in which they should be evaluated.
 const file2modules = Dict{String,FileModules}()
-# module2files holds the list of filenames used to define a particular module
-const module2files = Dict{Symbol,Vector{String}}()
+# pkgid2files holds the list of filenames used to define a particular module
+const pkgid2files = Dict{Base.PkgId,Vector{String}}()
 
 # included_files gets populated by callbacks we register with `include`. It's used
 # to track non-precompiled packages.
@@ -117,17 +119,17 @@ This function gets called by `watch_package` and runs when a package is first lo
 Its job is to organize the files and expressions defining the module so that later we can
 detect and process revisions.
 """
-function parse_pkg_files(modsym::Symbol)
+function parse_pkg_files(mod::Base.PkgId)
     files = String[]
-    if use_compiled_modules()
+    if false && use_compiled_modules()
         # We probably got the top-level file from the precompile cache
         # Try to find the matching cache file
-        uuid = Base.module_uuid(Base.root_module(modsym))
-        paths = Base.find_all_in_cache_path(modsym)
+        uuid = Base.module_build_id(Base.root_module(mod))
+        paths = Base.find_all_in_cache_path(mod)
         for path in paths
             provides, mods_files_mtimes, _ = Base.parse_cache_header(path)
             for (m, u) in provides
-                if u === uuid && m === modsym
+                if u === uuid && m === mod
                     # found the right cache file
                     for (modname, fname, _) in mods_files_mtimes
                         modname == "#__external__" && continue
@@ -139,7 +141,7 @@ function parse_pkg_files(modsym::Symbol)
                         # from the *.ji cachefile.
                         push!(file2modules, fname=>FileModules(mod, ModDict(), path))
                         push!(files, fname)
-                        module2files[modsym] = files
+                        pkgid2files[modsym] = files
                     end
                     return files
                 end
@@ -159,12 +161,11 @@ function parse_pkg_files(modsym::Symbol)
     #     top-level filename follows convention and matches the module. TODO?: it's
     #     possible that this needs to be supplemented with parsing.
     i = 1
-    modstring = string(modsym)
     while i <= length(included_files)
-        mod, fname = included_files[i]
-        modname = String(Symbol(mod))
-        if startswith(modname, modstring) || endswith(fname, modstring*".jl")
-            pr = parse_source(fname, mod)
+        modinc, fname = included_files[i]
+        modname = String(Symbol(modinc))
+        if startswith(modname, mod.name) || endswith(fname, mod.name * ".jl")
+            pr = parse_source(fname, modinc)
             if isa(pr, Pair)
                 push!(file2modules, pr)
             end
@@ -174,7 +175,7 @@ function parse_pkg_files(modsym::Symbol)
             i += 1
         end
     end
-    module2files[modsym] = files
+    pkgid2files[mod] = files
     files
 end
 
@@ -215,14 +216,15 @@ end
 This function gets called via a callback registered with `Base.require`, at the completion
 of module-loading by `using` or `import`.
 """
-function watch_package(modsym::Symbol)
+function watch_package(mod::Base.PkgId)
     # Because the callbacks are made with `invokelatest`, for reasons of performance
     # we need to make sure this function is fast to compile. By hiding the real
     # work behind a @schedule, we truncate the chain of dependency.
-    @schedule _watch_package(modsym)
+    @schedule _watch_package(mod)
 end
 
-function _watch_package(modsym::Symbol)
+function _watch_package(mod::Base.PkgId)
+    modsym = Symbol(mod.name)
     if modsym ∈ dont_watch_pkgs
         if modsym ∉ silence_pkgs
             warn("$modsym is excluded from watching by Revise. Use Revise.silence(\"$modsym\") to quiet this warning.")
@@ -230,7 +232,7 @@ function _watch_package(modsym::Symbol)
         remove_from_included_files(modsym)
         return nothing
     end
-    files = parse_pkg_files(modsym)
+    files = parse_pkg_files(mod)
     process_parsed_files(files)
 end
 
@@ -322,7 +324,7 @@ Reevaluate every definition in `mod`, whether it was changed or not. This is use
 to propagate an updated macro definition, or to force recompiling generated functions.
 """
 function revise(mod::Module)
-    for file in module2files[Symbol(mod)]
+    for file in pkgid2files[Symbol(mod)]
         eval_revised(file2modules[file].md)
     end
 end
@@ -454,14 +456,14 @@ function steal_repl_backend(backend = Base.active_repl_backend)
             end
             # Process revisions
             revise()
-            Base.REPL.eval_user_input(ast, backend)
+            REPL.eval_user_input(ast, backend)
         end
     end
     backend
 end
 
 function __init__()
-    Base.register_root_module(Symbol("Base.__toplevel__"), Base.__toplevel__)
+    Base.register_root_module(Base.__toplevel__)
     if isfile(silencefile[])
         pkgs = readlines(silencefile[])
         for pkg in pkgs
