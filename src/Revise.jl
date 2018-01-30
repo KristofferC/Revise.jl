@@ -97,7 +97,7 @@ function eval_revised(revmd::ModDict)
             try
                 eval(mod, ex)
             catch err
-                warn("failure to evaluate changes in ", mod)
+                @warn("failure to evaluate changes in ", mod)
                 println(STDERR, ex)
             end
         end
@@ -227,7 +227,7 @@ function _watch_package(mod::Base.PkgId)
     modsym = Symbol(mod.name)
     if modsym ∈ dont_watch_pkgs
         if modsym ∉ silence_pkgs
-            warn("$modsym is excluded from watching by Revise. Use Revise.silence(\"$modsym\") to quiet this warning.")
+            @warn("$modsym is excluded from watching by Revise. Use Revise.silence(\"$modsym\") to quiet this warning.")
         end
         remove_from_included_files(modsym)
         return nothing
@@ -255,7 +255,7 @@ function revise_dir_queued(dirname)
     if !isdir(dirname)
         sleep(0.1)   # in case git has done a delete/replace cycle
         if !isfile(dirname)
-            warn(dirname, " is not an existing directory, Revise is not watching")
+            @warn("$dirname, is not an existing directory, Revise is not watching")
             return nothing
         end
     end
@@ -277,7 +277,7 @@ function revise_file_now(file)
         src = read_from_cache(oldmd, file)
         push!(oldmd.md, oldmd.topmod=>OrderedSet{RelocatableExpr}())
         if !parse_source!(oldmd.md, src, Symbol(file), 1, oldmd.topmod)
-            warn("failed to parse cache file source text for ", file)
+            @warn("failed to parse cache file source text for ", file)
         end
     end
     pr = parse_source(file, oldmd.topmod)
@@ -288,7 +288,7 @@ function revise_file_now(file)
             eval_revised(revmd)
             file2modules[file] = newmd
         catch err
-            warn("evaluation error during revision: ", err)
+            @warn("evaluation error during revision: ", err)
             Base.show_backtrace(STDERR, catch_backtrace())
         end
     end
@@ -374,7 +374,22 @@ function track(mod::Module)
         # Add the files to the watch list
         process_parsed_files(files)
     else
-        error("no Revise.track recipe for module ", mod)
+        stdlibdir = joinpath(Sys.BINDIR, "..", "share", "julia", "site", "v$(VERSION.major).$(VERSION.minor)")
+        if Base.root_module_exists(Base.PkgId(string(mod)))
+            files = String[]
+            for (root, dirs, filenames) in walkdir(joinpath(stdlibdir, string(mod)))
+                for filename in filenames
+                    endswith(root, "test") && continue
+                    if endswith(filename, ".jl")
+                        push!(file2modules, parse_source(joinpath(root, filename), mod))
+                        push!(files, joinpath(root, filename))
+                    end
+                end
+            end
+            process_parsed_files(files)
+        else
+            error("no Revise.track recipe for module ", mod)
+        end
     end
     nothing
 end
