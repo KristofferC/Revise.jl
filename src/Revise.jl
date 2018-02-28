@@ -332,9 +332,9 @@ immediately (without rebuilding).
 At present some files in Base are not trackable, see the README.
 """
 function track(mod::Module)
+    mtcache = mtime(basesrccache)
     if mod == Base
         # Determine when the basesrccache was built
-        mtcache = mtime(basesrccache)
         # Initialize expression-tracking for files, and
         # note any modified since Base was built
         files = String[]
@@ -345,10 +345,28 @@ function track(mod::Module)
                 push!(revision_queue, filename)
             end
         end
-        # Add the files to the watch list
-        process_parsed_files(files)
     else
-        error("no Revise.track recipe for module ", mod)
+        stdlibdir = joinpath(Sys.BINDIR, "..", "share", "julia", "site", "v$(VERSION.major).$(VERSION.minor)")
+        if string(mod) in readdir(stdlibdir)
+            files = String[]
+            for (root, dirs, filenames) in walkdir(joinpath(stdlibdir, string(mod)))
+                for filename in filenames
+                    endswith(root, "test") && continue
+                    if endswith(filename, ".jl")
+                        file = joinpath(root, filename)
+                        push!(file2modules, parse_source(file, Base.root_module(Main, Symbol(mod))))
+                        push!(files, file)
+                        if mtime(file) > mtcache
+                            push!(revision_queue, file)
+                        end
+                    end
+                end
+            end
+            # Add the files to the watch list
+            process_parsed_files(files)
+        else
+            error("no Revise.track recipe for module ", mod)
+        end
     end
     nothing
 end
