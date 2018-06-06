@@ -346,7 +346,7 @@ function track(mod::Module)
             end
         end
     else
-        stdlibdir = joinpath(Sys.BINDIR, "..", "share", "julia", "site", "v$(VERSION.major).$(VERSION.minor)")
+        stdlibdir = joinpath(Sys.BINDIR, "..", "share", "julia", "stdlib", "v$(VERSION.major).$(VERSION.minor)")
         if string(mod) in readdir(stdlibdir)
             files = String[]
             for (root, dirs, filenames) in walkdir(joinpath(stdlibdir, string(mod)))
